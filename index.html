@@ -61,7 +61,7 @@
   </div>
   <nav role="tablist">
     <button role="tab" id="t-games" aria-selected="true" data-tab="games">Games</button>
-    <button role="tab" id="t-n64" aria-selected="false" data-tab="n64">N64</button>
+    <button role="tab" id="t-emulator" aria-selected="false" data-tab="emulator">Emulator</button>
   </nav>
   <input id="q" type="search" placeholder="Search games" aria-label="Search games" autocomplete="off">
 </header>
@@ -73,18 +73,10 @@
     <p id="empty">No games match that search.</p>
   </section>
 
-  <section id="n64" hidden>
-    <div class="emu">
-      <h2>N64 emulator</h2>
-      <p>Pick a game file and play it right here. Add a save file (.srm) too if you have one, and it loads with the game.</p>
-      <div class="pick">
-        <label class="drop"><b>Game file</b><small id="romName">.z64 (also .n64, .v64)</small>
-          <input id="rom" type="file" accept=".z64,.n64,.v64"></label>
-        <label class="drop"><b>Save file (optional)</b><small id="srmName">.srm</small>
-          <input id="srm" type="file" accept=".srm"></label>
-      </div>
-      <button class="act" id="play" disabled>Play</button>
-      <p id="note">Files stay on your device. The emulator code loads from the EmulatorJS CDN, so you need an internet connection.</p>
+  <section id="emulator" hidden>
+    <div class="emu" style="text-align:center;padding-top:8vh">
+      <a href="emulator.html" download="emulator.html" class="act" style="display:inline-block;text-decoration:none;font-size:1.1rem;padding:14px 28px">Download emulator.html</a>
+      <p style="margin-top:14px">Download the .html to use</p>
     </div>
   </section>
 </main>
@@ -92,11 +84,11 @@
 <div id="stage" role="dialog" aria-modal="true" aria-label="Emulator">
   <div id="bar">
     <span id="stitle"></span>
-    <button class="sub" id="dlsave">Download save</button>
     <button class="sub" id="full">Fullscreen</button>
     <button class="sub" id="close">Close</button>
   </div>
   <iframe id="frame" allow="fullscreen; gamepad; autoplay" allowfullscreen></iframe>
+  <div id="emuHost" style="flex:1;display:none;background:#000"></div>
 </div>
 
 <script>
@@ -113,8 +105,9 @@ const hue = s => colors[[...s].reduce((a,c)=>a+c.charCodeAt(0),0) % colors.lengt
 /* tabs */
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.setAttribute("aria-selected", x === b));
-  ["games","n64"].forEach(id => $(id).hidden = id !== b.dataset.tab);
+  ["games","emulator"].forEach(id => $(id).hidden = id !== b.dataset.tab);
   $("q").style.visibility = b.dataset.tab === "games" ? "visible" : "hidden";
+  showEmulator(b.dataset.tab === "emulator");
 });
 
 /* games grid + player */
@@ -139,49 +132,52 @@ $("q").addEventListener("input", () => {
 });
 GAMES.sort((a,b) => a.name.localeCompare(b.name)); render(GAMES);
 
+/* webretro embed (your code, with blob: support added for picked files) */
+function webretroEmbed(node, path, queries) {
+	var frame = document.createElement("iframe");
+	frame.style = "border: none; display: block; width: 100%; height: 100%;";
+	frame.allow = "fullscreen; gamepad; autoplay";
+	frame.allowFullscreen = true;
+
+	// change rom path to absolute if it isn't already
+	if (queries.rom) {
+		var link = document.createElement("a");
+		link.href = (/^(blob:|data:|(https?:)?\/\/)/i).test(queries.rom) ? queries.rom : "roms/" + queries.rom;
+		queries.rom = link.href;
+	}
+
+	frame.src = path + "?" + Object.entries(queries).map(i => i.map(i => i && encodeURIComponent(i))).map(i => i[1] ? i.join("=") : i[0]).join("&");
+	node.appendChild(frame);
+
+	return frame;
+}
+
+/* EMULATOR SETTINGS: folder where you uploaded webretro, and the system name for N64 */
+const WEBRETRO_PATH = "emulator.html";   // the webretro page, saved in your repo next to this file
+const SYSTEM = "n64";
+
 /* stage */
-const frame = $("frame");
+const frame = $("frame"), host = $("emuHost");
 function openStage(title, src, emu){
   $("stitle").textContent = title;
-  $("dlsave").style.display = emu ? "" : "none";
-  if (emu) frame.srcdoc = src; else frame.src = src;
+  host.textContent = "";
+  frame.style.display = emu ? "none" : "";
+  host.style.display = emu ? "block" : "none";
+  if (emu) webretroEmbed(host, WEBRETRO_PATH, { system: SYSTEM, rom: src });
+  else frame.src = src;
   $("stage").classList.add("open"); document.body.style.overflow = "hidden";
 }
 function closeStage(){
   $("stage").classList.remove("open"); document.body.style.overflow = "";
-  frame.removeAttribute("srcdoc"); frame.src = "about:blank";
+  host.textContent = ""; frame.src = "about:blank";
 }
 $("close").onclick = closeStage;
-$("full").onclick = () => (frame.requestFullscreen || frame.webkitRequestFullscreen).call(frame);
+$("full").onclick = () => { const el = host.style.display === "block" ? host : frame; (el.requestFullscreen || el.webkitRequestFullscreen).call(el); };
 document.addEventListener("keydown", e => { if (e.key === "Escape" && $("stage").classList.contains("open") && !document.fullscreenElement) closeStage(); });
 
-/* N64 via EmulatorJS */
-let romFile = null, srmFile = null;
-$("rom").onchange = e => { romFile = e.target.files[0] || null; $("romName").textContent = romFile ? romFile.name : ".z64 (also .n64, .v64)"; $("play").disabled = !romFile; };
-$("srm").onchange = e => { srmFile = e.target.files[0] || null; $("srmName").textContent = srmFile ? srmFile.name : ".srm"; };
-
-$("play").onclick = () => {
-  const romUrl = URL.createObjectURL(romFile);
-  const srmUrl = srmFile ? URL.createObjectURL(srmFile) : "";
-  const cdn = "https://cdn.emulatorjs.org/stable/data/";
-  const doc = '<!DOCTYPE html><body style="margin:0;background:#000"><div id="game" style="width:100vw;height:100vh"></div><script>'
-    + 'EJS_player="#game";EJS_core="n64";EJS_gameName=' + JSON.stringify(romFile.name.replace(/\.[^.]+$/, "")) + ';'
-    + 'EJS_gameUrl=' + JSON.stringify(romUrl) + ';EJS_pathtodata=' + JSON.stringify(cdn) + ';EJS_startOnLoaded=true;'
-    + 'EJS_onGameStart=function(){var u=' + JSON.stringify(srmUrl) + ';if(!u)return;'
-    + 'fetch(u).then(function(r){return r.arrayBuffer()}).then(function(b){var g=EJS_emulator.gameManager;'
-    + 'g.FS.writeFile(g.getSaveFilePath(),new Uint8Array(b));g.loadSaveFiles();}).catch(function(){});};'
-    + '<\/script><script src="' + cdn + 'loader.js"><\/script>';
-  openStage(romFile.name, doc, true);
-};
-
-$("dlsave").onclick = () => {
-  try {
-    const data = frame.contentWindow.EJS_emulator.gameManager.getSaveFile();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([data]));
-    a.download = $("stitle").textContent.replace(/\.[^.]+$/, "") + ".srm"; a.click();
-  } catch (e) { alert("No save data yet. Save in the game first, then try again."); }
-};
+/* emulator tab: open webretro directly, loaded once */
+let emuLoaded = false;
+function showEmulator(on){ /* download-only tab: nothing to load */ }
 </script>
 </body>
 </html>
